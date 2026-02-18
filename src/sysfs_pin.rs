@@ -140,3 +140,73 @@ impl core::ops::DerefMut for SysfsPin {
         &mut self.0
     }
 }
+
+#[cfg(feature = "async-gpio-sysfs")]
+mod async_impl {
+    use super::*;
+    use embedded_hal::digital::InputPin;
+    use embedded_hal_async::digital::Wait;
+    use tokio::time::{sleep, Duration};
+
+    impl Wait for SysfsPin {
+        async fn wait_for_high(&mut self) -> Result<(), Self::Error> {
+            if self.is_high()? {
+                return Ok(());
+            }
+            loop {
+                sleep(Duration::from_millis(1)).await;
+                if self.is_high()? {
+                    return Ok(());
+                }
+            }
+        }
+
+        async fn wait_for_low(&mut self) -> Result<(), Self::Error> {
+            if self.is_low()? {
+                return Ok(());
+            }
+            loop {
+                sleep(Duration::from_millis(1)).await;
+                if self.is_low()? {
+                    return Ok(());
+                }
+            }
+        }
+
+        async fn wait_for_rising_edge(&mut self) -> Result<(), Self::Error> {
+            let mut last = self.is_high()?;
+            loop {
+                sleep(Duration::from_millis(1)).await;
+                let current = self.is_high()?;
+                if !last && current {
+                    return Ok(());
+                }
+                last = current;
+            }
+        }
+
+        async fn wait_for_falling_edge(&mut self) -> Result<(), Self::Error> {
+            let mut last = self.is_high()?;
+            loop {
+                sleep(Duration::from_millis(1)).await;
+                let current = self.is_high()?;
+                if last && !current {
+                    return Ok(());
+                }
+                last = current;
+            }
+        }
+
+        async fn wait_for_any_edge(&mut self) -> Result<(), Self::Error> {
+            let mut last = self.is_high()?;
+            loop {
+                sleep(Duration::from_millis(1)).await;
+                let current = self.is_high()?;
+                if last != current {
+                    return Ok(());
+                }
+                last = current;
+            }
+        }
+    }
+}

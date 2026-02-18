@@ -280,3 +280,129 @@ impl std::error::Error for SPIError {
         Some(&self.err)
     }
 }
+
+#[cfg(feature = "async-spi")]
+mod embedded_hal_async_impl {
+    use super::*;
+    use embedded_hal_async::spi::{Operation as AsyncOperation, SpiBus, SpiDevice};
+    use spidev::SpidevTransfer;
+    use std::cmp::Ordering;
+    use std::convert::TryInto;
+    use std::io::{Read, Write};
+
+    impl SpiDevice<u8> for SpidevDevice {
+        async fn transaction(
+            &mut self,
+            operations: &mut [AsyncOperation<'_, u8>],
+        ) -> Result<(), Self::Error> {
+            let mut transfers = Vec::with_capacity(operations.len());
+            for op in operations.iter_mut() {
+                match op {
+                    AsyncOperation::Read(buf) => {
+                        transfers.push(SpidevTransfer::read(buf));
+                    }
+                    AsyncOperation::Write(buf) => {
+                        transfers.push(SpidevTransfer::write(buf));
+                    }
+                    AsyncOperation::Transfer(read, write) => {
+                        match read.len().cmp(&write.len()) {
+                            Ordering::Less => {
+                                let n = read.len();
+                                transfers.push(SpidevTransfer::read_write(&write[..n], read));
+                                transfers.push(SpidevTransfer::write(&write[n..]));
+                            }
+                            Ordering::Equal => {
+                                transfers.push(SpidevTransfer::read_write(write, read));
+                            }
+                            Ordering::Greater => {
+                                let (read1, read2) = read.split_at_mut(write.len());
+                                transfers.push(SpidevTransfer::read_write(write, read1));
+                                transfers.push(SpidevTransfer::read(read2));
+                            }
+                        }
+                    }
+                    AsyncOperation::TransferInPlace(buf) => {
+                        transfers.push(SpidevTransfer::read_write_in_place(buf));
+                    }
+                    AsyncOperation::DelayNs(ns) => {
+                        let us = {
+                            if *ns == 0 {
+                                0
+                            } else {
+                                let us = *ns / 1000;
+                                if us == 0 {
+                                    1
+                                } else {
+                                    (us).try_into().unwrap_or(u16::MAX)
+                                }
+                            }
+                        };
+                        transfers.push(SpidevTransfer::delay(us));
+                    }
+                }
+            }
+            self.0
+                .transfer_multiple(&mut transfers)
+                .map_err(|err| SPIError { err })?;
+            self.0.flush().map_err(|err| SPIError { err })?;
+            Ok(())
+        }
+
+        async fn read(&mut self, buf: &mut [u8]) -> Result<(), Self::Error> {
+            self.transaction(&mut [AsyncOperation::Read(buf)]).await
+        }
+
+        async fn write(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
+            self.transaction(&mut [AsyncOperation::Write(buf)]).await
+        }
+
+        async fn transfer(&mut self, read: &mut [u8], write: &[u8]) -> Result<(), Self::Error> {
+            self.transaction(&mut [AsyncOperation::Transfer(read, write)]).await
+        }
+
+        async fn transfer_in_place(&mut self, buf: &mut [u8]) -> Result<(), Self::Error> {
+            self.transaction(&mut [AsyncOperation::TransferInPlace(buf)]).await
+        }
+    }
+
+    impl SpiBus<u8> for SpidevBus {
+        async fn read(&mut self, words: &mut [u8]) -> Result<(), Self::Error> {
+            self.0.read_exact(words).map_err(|err| SPIError { err })
+        }
+
+        async fn write(&mut self, words: &[u8]) -> Result<(), Self::Error> {
+            self.0.write_all(words).map_err(|err| SPIError { err })
+        }
+
+        async fn transfer(&mut self, read: &mut [u8], write: &[u8]) -> Result<(), Self::Error> {
+            let read_len = read.len();
+            match read_len.cmp(&write.len()) {
+                Ordering::Less => self.0.transfer_multiple(&mut [
+                    SpidevTransfer::read_write(&write[..read_len], read),
+                    SpidevTransfer::write(&write[read_len..]),
+                ]),
+                Ordering::Equal => self
+                    .0
+                    .transfer(&mut SpidevTransfer::read_write(write, read)),
+                Ordering::Greater => {
+                    let (read1, read2) = read.split_at_mut(write.len());
+                    self.0.transfer_multiple(&mut [
+                        SpidevTransfer::read_write(write, read1),
+                        SpidevTransfer::read(read2),
+                    ])
+                }
+            }
+            .map_err(|err| SPIError { err })
+        }
+
+        async fn transfer_in_place(&mut self, words: &mut [u8]) -> Result<(), Self::Error> {
+            self.0
+                .transfer(&mut SpidevTransfer::read_write_in_place(words))
+                .map_err(|err| SPIError { err })
+        }
+
+        async fn flush(&mut self) -> Result<(), Self::Error> {
+            self.0.flush().map_err(|err| SPIError { err })
+        }
+    }
+}
