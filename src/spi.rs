@@ -304,23 +304,21 @@ mod embedded_hal_async_impl {
                     AsyncOperation::Write(buf) => {
                         transfers.push(SpidevTransfer::write(buf));
                     }
-                    AsyncOperation::Transfer(read, write) => {
-                        match read.len().cmp(&write.len()) {
-                            Ordering::Less => {
-                                let n = read.len();
-                                transfers.push(SpidevTransfer::read_write(&write[..n], read));
-                                transfers.push(SpidevTransfer::write(&write[n..]));
-                            }
-                            Ordering::Equal => {
-                                transfers.push(SpidevTransfer::read_write(write, read));
-                            }
-                            Ordering::Greater => {
-                                let (read1, read2) = read.split_at_mut(write.len());
-                                transfers.push(SpidevTransfer::read_write(write, read1));
-                                transfers.push(SpidevTransfer::read(read2));
-                            }
+                    AsyncOperation::Transfer(read, write) => match read.len().cmp(&write.len()) {
+                        Ordering::Less => {
+                            let n = read.len();
+                            transfers.push(SpidevTransfer::read_write(&write[..n], read));
+                            transfers.push(SpidevTransfer::write(&write[n..]));
                         }
-                    }
+                        Ordering::Equal => {
+                            transfers.push(SpidevTransfer::read_write(write, read));
+                        }
+                        Ordering::Greater => {
+                            let (read1, read2) = read.split_at_mut(write.len());
+                            transfers.push(SpidevTransfer::read_write(write, read1));
+                            transfers.push(SpidevTransfer::read(read2));
+                        }
+                    },
                     AsyncOperation::TransferInPlace(buf) => {
                         transfers.push(SpidevTransfer::read_write_in_place(buf));
                     }
@@ -357,11 +355,13 @@ mod embedded_hal_async_impl {
         }
 
         async fn transfer(&mut self, read: &mut [u8], write: &[u8]) -> Result<(), Self::Error> {
-            self.transaction(&mut [AsyncOperation::Transfer(read, write)]).await
+            self.transaction(&mut [AsyncOperation::Transfer(read, write)])
+                .await
         }
 
         async fn transfer_in_place(&mut self, buf: &mut [u8]) -> Result<(), Self::Error> {
-            self.transaction(&mut [AsyncOperation::TransferInPlace(buf)]).await
+            self.transaction(&mut [AsyncOperation::TransferInPlace(buf)])
+                .await
         }
     }
 
